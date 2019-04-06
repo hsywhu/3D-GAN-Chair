@@ -17,6 +17,6 @@ class ChairDataset(Dataset):
         image3D = np.load(file_name)
 
         # todo: normalize dataset according to dataset structure
-
+        image3D /= 255
         image3D = torch.from_numpy(image3D)
         return image3D

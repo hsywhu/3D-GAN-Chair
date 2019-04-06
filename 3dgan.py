@@ -11,7 +11,7 @@ import torch
 parser = argparse.ArgumentParser()
 parser.add_argument( '--n_epochs',
                      type=int,
-                     default=20,
+                     default=30,
                      help='number of epochs of training' )
 parser.add_argument( '--batch_size',
                      type=int,
@@ -23,7 +23,7 @@ parser.add_argument( '--lr_G',
                      help='adam: learning rate' )
 parser.add_argument( '--lr_D',
                      type=float,
-                     default=0.00001,
+                     default=0.0001,
                      help='adam: learning rate' )
 parser.add_argument( '--b1',
                      type=float,
@@ -43,41 +43,41 @@ parser.add_argument( '--latent_dim',
                      help='dimensionality of the latent space' )
 parser.add_argument( '--sample_interval',
                      type=int,
-                     default=400,
+                     default=5,
                      help='interval between image sampling' )
 parser.add_argument( '--train_csv',
                      type=str,
-                     default='./dataset/train.csv',
+                     default='./dataset/3d/train.csv',
                      help='path to the training csv file' )
 parser.add_argument( '--train_root',
                      type=str,
-                     default='./dataset/',
+                     default='./dataset/3d',
                      help='path to the training root' )
 opt = parser.parse_args()
 
 class Generator(nn.Module):
-    def __init__(self, d=16):
-        super(Generator).__init__()
+    def __init__(self):
+        super(Generator, self).__init__()
         # ConvTranspose3d(in_channels, out_channels, kernel_size,
         #                 stride=1, padding=0, output_padding=0, 
         #                 groups=1, bias=True, dilation=1)
         self.deconv1 = nn.ConvTranspose3d(opt.latent_dim, 512, 4, 1, 0)
         self.deconv1_bn = nn.BatchNorm3d(512)
-        self.deconv2 = nn.ConvTranspose3d(512, 256, 4, 2, 1 )
+        self.deconv2 = nn.ConvTranspose3d(512, 256, 4, 2, 1)
         self.deconv2_bn = nn.BatchNorm3d(256)
-        self.deconv3 = nn.ConvTranspose3d(256, 128, 4, 2, 1 )
+        self.deconv3 = nn.ConvTranspose3d(256, 128, 4, 2, 1)
         self.deconv3_bn = nn.BatchNorm3d(128)
         self.deconv4 = nn.ConvTranspose3d(128, 64, 4, 2, 1)
-        self.deconv4_bn = nn.BatchNorm3d(128)
-        self.deconv5 = nn.ConvTranspose3d(128, 1, 4, 2, 1 )
+        self.deconv4_bn = nn.BatchNorm3d(64)
+        self.deconv5 = nn.ConvTranspose3d(64, 1, 4, 2, 1)
 
     # weight_init
     def weight_init( self, mean, std ):
         for m in self._modules:
-            normal_init( self._modules[ m ], mean, std )
+            normal_init(self._modules[m], mean, std)
 
     # forward method
-    def forward( self, input ):
+    def forward(self, input):
         x = input.view(-1, opt.latent_dim, 1, 1, 1)
         x = F.relu(self.deconv1_bn(self.deconv1(x)))
         x = F.relu(self.deconv2_bn(self.deconv2(x)))
@@ -102,7 +102,7 @@ class Discriminator(nn.Module):
     # weight_init
     def weight_init(self, mean, std):
         for m in self._modules:
-            normal_init(self._modules[ m ], mean, std)
+            normal_init(self._modules[m], mean, std)
 
     # forward method
     def forward(self, input):
@@ -140,15 +140,16 @@ def main():
                                               shuffle=True )
     # Optimizers
     optimizer_G = torch.optim.Adam( generator.parameters(),
-                                    lr=opt.lr,
+                                    lr=opt.lr_G,
                                     betas=(opt.b1, opt.b2))
     optimizer_D = torch.optim.Adam( discriminator.parameters(),
-                                    lr=opt.lr,
+                                    lr=opt.lr_D,
                                     betas=(opt.b1, opt.b2))
     # ----------
     #  Training
     # ----------
     os.makedirs('models', exist_ok=True)
+    os.makedirs('mesh', exist_ok=True)
     d_acc_last = 0
     for epoch in range(opt.n_epochs):
         # learning rate decay
@@ -193,9 +194,10 @@ def main():
             gen_acc = (label_gen < 0.5).float().sum() / gen_mesh.shape[ 0 ]
             d_acc = (real_acc + gen_acc) / 2
             if d_acc_last < 0.8:
+                print("d_loss_step")
                 d_loss.backward()
+                optimizer_D.step()
             d_acc_last = d_acc
-            optimizer_D.step()
             print("[Epoch %d/%d] [Batch %d/%d] [D loss: %f, acc: %.2f%%] [G loss: %f]" % \
                     (epoch,
                      opt.n_epochs,
@@ -205,6 +207,7 @@ def main():
                      d_acc * 100,
                      g_loss.item()))
             batches_done = epoch * len(dataloader) + i
+            print("batches_done: ", batches_done)
             if batches_done % opt.sample_interval == 0:
                 np.save('mesh/%d.npy' % batches_done, gen_mesh.detach().cpu())
                 torch.save( generator, 'models/gen_%d.pt' % batches_done )
