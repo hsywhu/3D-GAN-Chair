@@ -12,7 +12,7 @@ images, labels = loadlocal_mnist(
 rootDir = "./dataset/3d"
 csvList = []
 
-for idx in range(20):
+for idx in range(6000):
 # for idx in range(1):
     thisImage = images[idx]
     thisLabel = labels[idx]
