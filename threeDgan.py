@@ -11,7 +11,7 @@ import torch
 parser = argparse.ArgumentParser()
 parser.add_argument( '--n_epochs',
                      type=int,
-                     default=30,
+                     default=100,
                      help='number of epochs of training' )
 parser.add_argument( '--batch_size',
                      type=int,
@@ -23,7 +23,7 @@ parser.add_argument( '--lr_G',
                      help='adam: learning rate' )
 parser.add_argument( '--lr_D',
                      type=float,
-                     default=0.0001,
+                     default=0.00001,
                      help='adam: learning rate' )
 parser.add_argument( '--b1',
                      type=float,
@@ -51,7 +51,7 @@ parser.add_argument( '--train_csv',
                      help='path to the training csv file' )
 parser.add_argument( '--train_root',
                      type=str,
-                     default='./dataset/3d',
+                     default='./dataset/chairs/',
                      help='path to the training root' )
 opt = parser.parse_args()
 
@@ -134,8 +134,8 @@ def main():
     generator.weight_init(mean=0.0, std=0.02)
     discriminator.weight_init(mean=0.0, std=0.02)
     # Configure data loader
-    minst_dataset = ChairDataset(opt.train_csv, opt.train_root)
-    dataloader = torch.utils.data.DataLoader( minst_dataset,
+    chair_dataset = ChairDataset(opt.train_root, 6778)
+    dataloader = torch.utils.data.DataLoader( chair_dataset,
                                               batch_size=opt.batch_size,
                                               shuffle=True )
     # Optimizers
@@ -175,6 +175,11 @@ def main():
             # Sample noise as generator input
             z = Variable(Tensor(np.random.normal(0, 1, (mesh.shape[0], opt.latent_dim))))
             # Generate a batch of images
+            if cuda:
+                z = z.cuda()
+                valid = valid.cuda()
+                fake = fake.cuda()
+                real_mesh = real_mesh.cuda()
             gen_mesh = generator(z)
             # Loss measures generator's ability to fool the discriminator
             g_loss = adversarial_loss(discriminator(gen_mesh), valid)
