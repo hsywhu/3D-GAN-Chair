@@ -7,15 +7,16 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
+import copy
 
 parser = argparse.ArgumentParser()
 parser.add_argument( '--n_epochs',
                      type=int,
-                     default=100,
+                     default=200,
                      help='number of epochs of training' )
 parser.add_argument( '--batch_size',
                      type=int,
-                     default=64,
+                     default=80,
                      help='size of the batches' )
 parser.add_argument( '--lr_G',
                      type=float,
@@ -23,7 +24,7 @@ parser.add_argument( '--lr_G',
                      help='adam: learning rate' )
 parser.add_argument( '--lr_D',
                      type=float,
-                     default=0.00001,
+                     default=0.0001,
                      help='adam: learning rate' )
 parser.add_argument( '--b1',
                      type=float,
@@ -53,6 +54,10 @@ parser.add_argument( '--train_root',
                      type=str,
                      default='./dataset/chairs/',
                      help='path to the training root' )
+parser.add_argument( '--unrolled_steps',
+                     type=int,
+                     default=10,
+                     help='how many iteration for every unrolled step' )
 opt = parser.parse_args()
 
 class Generator(nn.Module):
@@ -106,12 +111,19 @@ class Discriminator(nn.Module):
 
     # forward method
     def forward(self, input):
+        input = input.view(-1, 1, 64, 64, 64)
         x = F.leaky_relu(self.conv1(input), 0.2)
         x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2)
         x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2)
         x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2)
         x = F.sigmoid(self.conv5(x))
         return x
+
+    def load(self, backup):
+        for m_from, m_to in zip(backup.modules(), self.modules()):
+            m_to.weight.data = m_from.weight.data.clone()
+            if m_to.bias is not None:
+                m_to.bias.data = m_from.bias.data.clone()
 
 def normal_init(m, mean, std):
     if isinstance(m, nn.ConvTranspose3d) or isinstance(m, nn.Conv3d):
@@ -151,6 +163,7 @@ def main():
     os.makedirs('models', exist_ok=True)
     os.makedirs('mesh', exist_ok=True)
     d_acc_last = 0
+
     for epoch in range(opt.n_epochs):
         # learning rate decay
         # if (epoch + 1) == 11:
@@ -168,29 +181,22 @@ def main():
             # Configure input
             mesh = mesh.unsqueeze(1)
             real_mesh = Variable(mesh.type(Tensor))
-            # -----------------
-            #  Train Generator
-            # -----------------
-            optimizer_G.zero_grad()
-            # Sample noise as generator input
-            z = Variable(Tensor(np.random.normal(0, 1, (mesh.shape[0], opt.latent_dim))))
-            # Generate a batch of images
             if cuda:
-                z = z.cuda()
                 valid = valid.cuda()
                 fake = fake.cuda()
                 real_mesh = real_mesh.cuda()
-            gen_mesh = generator(z)
-            # Loss measures generator's ability to fool the discriminator
-            g_loss = adversarial_loss(discriminator(gen_mesh), valid)
-            g_loss.backward()
-            optimizer_G.step()
+
             # ---------------------
             #  Train Discriminator
             # ---------------------
             optimizer_D.zero_grad()
             # Measure discriminator's ability to classify real from generated samples
             label_real = discriminator(real_mesh)
+            z = Variable(Tensor(np.random.normal(0, 1, (mesh.shape[0], opt.latent_dim))))
+            if cuda:
+                z = z.cuda()
+            with torch.no_grad():
+                gen_mesh = generator(z)
             label_gen = discriminator(gen_mesh.detach())
             real_loss = adversarial_loss(label_real, valid)
             fake_loss = adversarial_loss(label_gen, fake)
@@ -203,6 +209,48 @@ def main():
                 d_loss.backward()
                 optimizer_D.step()
             d_acc_last = d_acc
+
+            # -----------------
+            #  Train Generator
+            # -----------------
+            optimizer_G.zero_grad()
+
+            if opt.unrolled_steps > 0:
+                backup = copy.deepcopy(discriminator.state_dict())
+                for unrolled_step in range(opt.unrolled_steps):
+                    optimizer_D.zero_grad()
+
+                    # train D on real
+                    d_real_decision = discriminator(real_mesh)
+                    d_real_error = adversarial_loss(d_real_decision, valid)
+
+                    # train D on fake
+                    z = Variable(Tensor(np.random.normal(0, 1, (mesh.shape[0], opt.latent_dim))))
+                    if cuda:
+                        z = z.cuda()
+                    with torch.no_grad():
+                        d_fake_data = generator(z)
+                    d_fake_decision = discriminator(d_fake_data)
+                    d_fake_error = adversarial_loss(d_fake_decision, fake)
+
+                    d_loss = d_real_error + d_fake_error
+                    d_loss.backward(create_graph = True)
+                    optimizer_D.step()
+
+            # Sample noise as generator input
+            z = Variable(Tensor(np.random.normal(0, 1, (mesh.shape[0], opt.latent_dim))))
+            if cuda:
+                z = z.cuda()
+            g_fake_data = generator(z)
+            d_g_fake_decision = discriminator(g_fake_data)
+            g_loss = adversarial_loss(d_g_fake_decision, valid)
+            g_loss.backward()
+            optimizer_G.step()
+
+            if opt.unrolled_steps > 0:
+                discriminator.load_state_dict(backup)
+                del backup
+
             print("[Epoch %d/%d] [Batch %d/%d] [D loss: %f, acc: %.2f%%] [G loss: %f]" % \
                     (epoch,
                      opt.n_epochs,
